@@ -1,0 +1,13 @@
+# these tests should all fail
+# this is for testing the failure output of tester
+
+COMMAND echo foo
+STDOUT bar
+
+COMMAND echo baz
+STDOUT bar
+STDERR baz
+
+COMMAND echo glarg
+STDERR fink
+EXIT 2

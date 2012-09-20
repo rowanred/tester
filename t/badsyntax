@@ -1,0 +1,9 @@
+# this is a badly formatted test file
+
+VAR=something
+RAND=@RANDINT(100)
+
+COMMAND echo ${RAND}
+STDOUT ${RAND}
+
+This should error

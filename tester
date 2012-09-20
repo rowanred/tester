@@ -1,0 +1,540 @@
+#!/usr/bin/perl -w
+# Run test commands in a file(s) and compare the results of stdout, stderr,
+# and exit code to those required.  Output standard TAP format results.
+#
+# John "Rowan" Littell - 2012-09-19
+
+$main::VERSION = '1.0';
+
+use strict;
+use Getopt::Long qw / :config auto_help auto_version /;
+use IPC::Open3;
+use Symbol qw / gensym /;
+use YAML qw / Dump /;
+
+# default TAP version
+my $TAPVERSION = 1.2;
+
+# directories to be checked for test files if not specified on command line
+my @TEST_DIRS = qw / t test /;
+
+# default word list location
+my $WORDS = '/usr/share/dict/words';
+my @WORDS;
+
+# randword: generate a string of random words
+# ARGS:
+#  $nwords: number of words to return
+# RETURNS:
+#  $string: a string of N random words from /usr/share/dict/words
+# ACTIONS: loads /usr/share/dict/words
+sub randword ($) {
+  my ($nwords) = @_;
+  my (@string);
+
+  if ($#WORDS < 0) {
+    open (W, $WORDS);
+    chomp (@WORDS = (<W>));
+    close (W);
+  }
+
+  for (my $n = 0; $n < $nwords; $n++) {
+    my $i = int (rand ($#WORDS + 1));
+    push @string, $WORDS[$i];
+  }
+  return (join (' ', @string));
+}
+
+# readtests: read the tests and results from a file
+# ARGS:
+#  $file: file name to open and read tests from
+#  $tests: array pointer that will hold arrays of test information
+# RETURNS: undef
+# ACTIONS: appends test information to the $tests array pointer
+sub readtests ($$) {
+  my ($file, $tests) = @_;
+  my (%var, $command, $stdout, $stderr, $exit);
+
+  open (F, $file);
+  my $incommand = 0;
+  undef $command;
+  undef $stdout;
+  undef $stderr;
+  undef $exit;
+  while (<F>) {
+    chomp;
+    next if ($_ =~ /^\s*#/);
+
+    if ($_ =~ /^\s*$/) {
+      # blank lines in a command block indicate the end of the test
+      if ($incommand && defined ($command)) {
+        push @$tests, [$file, $command, $stdout, $stderr, $exit];
+      }
+      undef $command;
+      undef $stdout;
+      undef $stderr;
+      undef $exit;
+      $incommand = 0;
+      next;
+    }
+
+    # this sets variables and substitutes the following defined functions:
+    #  RANDINT(N) - generate a random integer between 0 and N
+    #  RANDWORD(N) - generate N random words from /usr/share/dict/words
+    if ($_ =~ /^\s*(\S+)\s*=\s*(.+)$/) {
+      my ($var, $val) = ($1, $2);
+      while ($val =~ /\@RANDINT\((\d+)\)/) {
+        my $int = int (rand ($1));
+        $val =~ s/\@RANDINT\(\d+\)/$int/;
+      }
+      while ($val =~ /\@RANDWORD\((\d+)\)/) {
+        my $string = randword ($1);
+        $val =~ s/\@RANDWORD\(\d+\)/$string/;
+      }
+      $var{$var} = $val;
+      next;
+    }
+
+    # COMMAND section, with variable substitution
+    if ($_ =~ /^COMMAND\s+(.+)$/) {
+      $command = $1;
+      foreach my $var (keys %var) {
+        $command =~ s/\$\{?$var\}?/$var{$var}/g;
+      }
+      $incommand = 1;
+      next;
+    }
+
+    # STDOUT expectation, with variable substitution
+    if ($_ =~ /^STDOUT\s+(.+)$/) {
+      $stdout = $1;
+      foreach my $var (keys %var) {
+        $stdout =~ s/\$\{?$var\}?/$var{$var}/g;
+      }
+      next;
+    }
+
+    # STDERR expectation, with variable substitution
+    if ($_ =~ /^STDERR\s+(.+)$/) {
+      $stderr = $1;
+      foreach my $var (keys %var) {
+        $stderr =~ s/\$\{?$var\}?/$var{$var}/g;
+      }
+      next;
+    }
+
+    # exit value expectation
+    if ($_ =~ /^EXIT\s+(\d+)$/) {
+      $exit = $1;
+      next;
+    }
+
+    # we should never reach this unless we have a syntax error
+    print STDERR "Test file syntax error at $file:$.\n> $_\n";
+    exit 2;
+  }
+  close (F);
+
+  # push the last command, if there wasn't a final blank line
+  if ($incommand && defined ($command)) {
+    push @$tests, [$file, $command, $stdout, $stderr, $exit];
+  }
+}
+
+# printyaml: output test diagnostic in YAML format
+# ARGS:
+#  $diagnostic: hash pointer to the diagnostics structure
+# RETURNS: none
+# ACTIONS: prints YAML for TAP v1.3 format
+sub printyaml ($) {
+  my ($diagnostic) = @_;
+
+  print "# Diagnostic\n";
+  foreach my $y (split ("\n", Dump $diagnostic)) {
+    print "  $y\n";
+  }
+  print "  ...\n";
+}
+
+# runtest: run a single test and report results in TAP format
+# ARGS:
+#  $number: test number used for TAP output
+#  $verbosity: verbosity level (controls how much diagnostic info is displayed)
+#  @test: array of test information as given by readtests:
+#   $file: file name from which test is read
+#   $command: the command to run
+#   $stdout: expected stdout regex
+#   $stderr: expected stderr regex
+#   $exit: expected exit code
+# RETURNS: 1 if test ok, 0 if test not ok
+# ACTIONS: runs test commands - these can, theoretically, do anything
+sub runtest ($$@) {
+  my ($number, $verbosity, $file, $command, $stdout, $stderr, $exit) = @_;
+  my ($wtr, $rdr, $err, $code);
+  my ($out_ok, $err_ok, $exit_ok, $diagnostic);
+  my $diag = '';
+
+  $out_ok = $err_ok = $exit_ok = 1;
+  $diagnostic->{'command'} = $command;
+  $diagnostic->{'message'} = "Ok";
+  $diagnostic->{'severity'} = 'pass';
+
+  $err = gensym;
+
+  # run the command and catch stdout, stderr, and exit code
+  my $pid = open3 ($wtr, $rdr, $err, $command);
+  waitpid ($pid, 0);
+  $code = $? >> 8;
+  my $a_stdout = do { local $/; <$rdr> };
+  my $a_stderr = do { local $/; <$err> };
+
+  # slurp on filehandle with no output produces undef, so reset to empty
+  $a_stdout = '' if (!defined ($a_stdout));
+  $a_stderr = '' if (!defined ($a_stderr));
+
+  # check STDOUT
+  if (defined ($stdout)) {
+    $diagnostic->{'data'}->{'stdout'}->{'expected'} = $stdout;
+    $diagnostic->{'data'}->{'stdout'}->{'got'} = $a_stdout;
+    $diag .= "# STDOUT:";
+    if ($a_stdout =~ /$stdout/sm) {
+      $out_ok = 1;
+    } else {
+      $out_ok = 0;
+      $diag .= " mismatch";
+    }
+    $diag .= "\n# - Expected: $stdout\n# - Actual:\n";
+    foreach my $l (split (/\n/, $a_stdout)) {
+      $diag .= "# -- $l\n";
+    }
+  }
+
+  # check STDERR
+  if (defined ($stderr)) {
+    $diagnostic->{'data'}->{'stderr'}->{'expected'} = $stderr;
+    $diagnostic->{'data'}->{'stderr'}->{'got'} = $a_stderr;
+    $diag .= "# STDERR:";
+    if ($a_stderr =~ /$stderr/sm) {
+      $err_ok = 1;
+    } else {
+      $err_ok = 0;
+      $diag .= " mismatch";
+    }
+    $diag .= "\n# - Expected: $stderr\n# - Actual:\n";
+    foreach my $l (split (/\n/, $a_stderr)) {
+      $diag .= "# -- $l\n";
+    }
+  }
+
+  # check exit code
+  if (defined ($exit)) {
+    $diagnostic->{'data'}->{'exit'}->{'expected'} = $exit;
+    $diagnostic->{'data'}->{'exit'}->{'got'} = $code;
+    $diag .= "# EXIT CODE:";
+    if ($code == $exit) {
+      $exit_ok = 1;
+    } else {
+      $exit_ok = 0;
+      $diag .= " mismatch";
+    }
+    $diag .= "\n# -- Expected: $exit\n# -- Actual: $code\n";
+  }
+
+  # print results and return
+  if ($out_ok && $err_ok && $exit_ok) {
+    if ($verbosity > 0) {
+      print "ok $number - $file - $command\n";
+      if ($verbosity > 1) {
+        if ($TAPVERSION > 1.2) {
+          printyaml ($diagnostic);
+        } else {
+          print $diag;
+        }
+      }
+    }
+    return 1;
+  } else {
+    if ($verbosity > 0) {
+      print "not ok $number - $command\n";
+      if ($TAPVERSION > 1.2) {
+        $diagnostic->{'message'} = 'Failed test';
+        $diagnostic->{'severity'} = 'fail';
+        printyaml ($diagnostic);
+      } else {
+        print $diag;
+      }
+    }
+    return 0;
+  }
+}
+
+# gettestfiles: read a directory to get a list of *.t files
+# ARGS:
+#  $dir: directory in which to find *.t files
+# RETURNS:
+#  @files: list of file names
+# ACTIONS: none
+sub gettestfiles ($) {
+  my ($dir) = @_;
+  my (@files);
+
+  if (!-d $dir) {
+    return;
+  }
+
+  opendir (D, $dir);
+  foreach my $f (readdir (D)) {
+    next if ($f !~ /\.t$/);
+    push @files, "$dir/$f";
+  }
+  closedir (D);
+
+  return (@files);
+}
+
+################################################################################
+
+MAIN:
+{
+  my ($quiet, $verbosity, @check, @testfiles, $testdir, @tests);
+
+  $testdir = '';
+  $verbosity = 1;
+
+  GetOptions (
+    'check=i' => \@check,
+    'quiet' => sub { $verbosity = 0 },
+    'new' => sub { $TAPVERSION = 1.3 },
+    'old' => sub { $TAPVERSION = 1.2 },
+    'verbose+' => \$verbosity,
+    'testdir=s' => \$testdir,
+    'words=s' => sub { $WORDS = $_[1] if (-r $_[1]) },
+  );
+
+  # find the test files
+  if ($testdir ne '') {
+    # test dir specified
+    @testfiles = gettestfiles ($testdir);
+  } else {
+    # if ARGV given, use those files, else try to find test dirs
+    if ($#ARGV >= 0) {
+      push @testfiles, @ARGV;
+    } else {
+      foreach my $dir (@TEST_DIRS) {
+        @testfiles = gettestfiles ($dir);
+        if ($#testfiles >= 0) {
+          $testdir = $dir;
+          last;
+        }
+      }
+    }
+  }
+
+  # read the tests in each test file found
+  foreach my $file (@testfiles) {
+    readtests ($file, \@tests);
+  }
+
+  # run all the tests found
+  if ($#tests >= 0) {
+    chdir ($testdir) if ($testdir ne '');
+
+    my $ntests = $#tests + 1;
+    if ($verbosity > 0) {
+      if ($TAPVERSION > 1.2) {
+        print "TAP version $TAPVERSION\n";
+      }
+      print "1..$ntests\n";
+    }
+
+    my $i = 1;
+    my $success = 0;
+    foreach my $t (@tests) {
+      my @test = @$t;
+      if ($#check >= 0) {
+        if (grep (/^$i$/, @check)) {
+          $success += runtest ($i, $verbosity, @test);
+        } else {
+          print "ok $i # skip - test excluded by request\n";
+        }
+      } else {
+        $success += runtest ($i, $verbosity, @test);
+      }
+      $i++;
+    }
+
+    if ($success != $ntests) {
+      exit 1;
+    } else {
+      exit 0;
+    }
+  }
+}
+
+################################################################################
+
+=pod
+
+=head1 NAME
+
+B<tester> -- TAP compatible test runner
+
+=head1 SYNOPSIS
+
+B<tester> [-q | -v] [ -o | -n ] [ -t testdir ] [ -w words ] [ -c N ] [ test1.t ... ]
+
+=head1 DESCRIPTION
+
+The B<tester> utility reads a file describing test commands to be
+run; runs each test; compares STDOUT, STDERR, and exit codes; and
+reports the results in standard TAP format.  This can be used as
+part of a test harness or unit testing suite.  The test file format
+is described in B<FILE FORMAT>.
+
+The following options are available:
+
+=over 8
+
+=item B<-c N>
+
+Only check test number I<N>.  This option may be given multiple
+times to only check a specified subset of tests.
+
+=item B<-h>
+
+Display help message.
+
+=item B<-n>
+
+Use version 1.3 of TAP output protocol.  The primary difference is that
+diagnostics are reported in YAML.
+
+=item B<-o>
+
+Use version 1.2 of TAP output protocol (default).
+
+=item B<-q>
+
+Quiet mode - no output is printed and B<tester> returns 0 for success and
+1 on any test failure.
+
+=item B<-t> F<directory>
+
+Search in this directory for files named F<*.t> which should include
+tests.  If no directory is specified and no test files are given
+on the command line, the directories F<t> and F<test> are searched,
+if present.
+
+=item B<-v>
+
+Verbose mode - diagnostics are printed even on test success.
+
+=item B<-w> F<words>
+
+Use an alternate file for random words instead of F</usr/share/dict/words>.
+
+=back
+
+=head1 FILE FORMAT
+
+The test file format is designed to be as simple as possible.  It
+consists of two functional blocks - variable assignments and command
+test blocks.  Each may appear anywhere in the file and may appear
+multiple times.  Lines beginning with the comment character (#) are
+ignored.  Blank lines after a command test block signify the end
+of that block, any other blank lines are ignored.  Unexpected lines
+are considered an error and B<tester> will complain and exit on
+encountering such.
+
+=head2 Variable Assignment
+
+In order to facilitate readability and reuse, variables may be
+declared and then used in later commands or output matching
+expressions.  The general form of an assignment is
+
+    VARIABLE = VALUE
+
+Whitespace around the equals sign is optional.  Everything beyond
+the equals sign (excluding leading whitespace) is used as the
+variable's value.  Multiple assignments to the same variable are
+allowed; the last one is used the next time the variable is referenced
+in a command test block.
+
+Variable assignment may also use one of two built in functions:
+B<@RANDINT> and B<@RANDWORD>.  Each may be called multiple times in
+a single variable assignment.
+
+=over 8
+
+=item @RANDINT(N)
+
+Generate a random integer between 0 and I<N> and substitute that into the
+variable's value.
+
+=item @RANDWORD(N)
+
+Generate a list of I<N> random words from F</usr/share/dict/words> (or other
+word list given with B<-w> option).  Words are space separated.
+
+=back
+
+=head2 Command Test Blocks
+
+The fundamental purpose of B<tester> is to run commands and verify
+output and exit codes.  The command test blocks define these commands
+and expected results.  The format of a command test block is:
+
+    COMMAND /usr/bin/some/command --arg1 --arg2 etc.
+    STDOUT a regular expression
+    STDERR another regular expression
+    EXIT N
+
+Command test blocks begin with B<COMMAND> and end with a blank line
+or end-of-file.  The B<STDOUT>, B<STDERR>, and B<EXIT> lines are
+all optional.  If none are present, it is not an error, however the
+command implicitly is always a success (if you don't care about any
+output or exit code, why include it?).
+
+Both the B<STDOUT> and B<STDERR> lines are interpreted as regular
+expressions with B<m> and B<s> modifiers - dot matches newlines and
+anchors match next to embedded newlines.  E.g., the following
+B<STDOUT> matches are checked in B<tester> as such:
+
+    STDOUT a string
+      $stdout =~ /a string/ms
+
+    STDOUT ^Version [2-4]\.\d+\.\d+(-\w+)$
+      $stdout =~ /^Version [2-4]\.\d+\.\d+(-\w+)$/ms
+
+The B<EXIT> line compares the command's exit code with that specified.
+
+If multiple tests (B<STDOUT>, B<STDERR>, B<EXIT>) are included for
+a command, all must pass for the command test block to pass.
+
+=head1 RETURN VALUES
+
+B<tester> exits with one of the following values:
+
+=over 8
+
+=item 0
+
+All tests passed.
+
+=item 1
+
+One or more tests failed.
+
+=item >1
+
+A processing error occurred.
+
+=back
+
+=head1 STANDARDS
+
+B<tester> outputs standard TAP protocol tests results as described
+at L<http://http://testanything.org/>.  If B<-n> is specified, version
+1.3 of TAP is used.
+
+=cut
