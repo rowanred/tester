@@ -1,124 +1,123 @@
-NNAAMMEE
-       tester -- TAP compatible test runner
+NAME
+    tester -- TAP compatible test runner
 
-SSYYNNOOPPSSIISS
-       tteesstteerr [-q | -v] [ -o | -n ] [ -t testdir ] [ -w words ] [ -c N ] [
-       test1.t ... ]
+SYNOPSIS
+    tester [-q | -v] [ -o | -n ] [ -t testdir ] [ -w words ] [ -c N ] [
+    test1.t ... ]
 
-DDEESSCCRRIIPPTTIIOONN
-       The tteesstteerr utility reads a file describing test commands to be run;
-       runs each test; compares STDOUT, STDERR, and exit codes; and reports
-       the results in standard TAP format.  This can be used as part of a test
-       harness or unit testing suite.  The test file format is described in
-       FFIILLEE FFOORRMMAATT.
+DESCRIPTION
+    The tester utility reads a file describing test commands to be run; runs
+    each test; compares STDOUT, STDERR, and exit codes; and reports the
+    results in standard TAP format. This can be used as part of a test
+    harness or unit testing suite. The test file format is described in FILE
+    FORMAT.
 
-       The following options are available:
+    The following options are available:
 
-       --cc NN    Only check test number _N.  This option may be given multiple
-               times to only check a specified subset of tests.
+    -c N    Only check test number *N*. This option may be given multiple
+            times to only check a specified subset of tests.
 
-       --hh      Display help message.
+    -h      Display help message.
 
-       --nn      Use version 1.3 of TAP output protocol.  The primary difference
-               is that diagnostics are reported in YAML.
+    -n      Use version 1.3 of TAP output protocol. The primary difference
+            is that diagnostics are reported in YAML.
 
-       --oo      Use version 1.2 of TAP output protocol (default).
+    -o      Use version 1.2 of TAP output protocol (default).
 
-       --qq      Quiet mode - no output is printed and tteesstteerr returns 0 for
-               success and 1 on any test failure.
+    -q      Quiet mode - no output is printed and tester returns 0 for
+            success and 1 on any test failure.
 
-       --tt _d_i_r_e_c_t_o_r_y
-               Search in this directory for files named _*_._t which should
-               include tests.  If no directory is specified and no test files
-               are given on the command line, the directories _t and _t_e_s_t are
-               searched, if present.
+    -t directory
+            Search in this directory for files named *.t which should
+            include tests. If no directory is specified and no test files
+            are given on the command line, the directories t and test are
+            searched, if present.
 
-       --vv      Verbose mode - diagnostics are printed even on test success.
+    -v      Verbose mode - diagnostics are printed even on test success.
 
-       --ww _w_o_r_d_s
-               Use an alternate file for random words instead of
-               _/_u_s_r_/_s_h_a_r_e_/_d_i_c_t_/_w_o_r_d_s.
+    -w words
+            Use an alternate file for random words instead of
+            /usr/share/dict/words.
 
-FFIILLEE FFOORRMMAATT
-       The test file format is designed to be as simple as possible.  It
-       consists of two functional blocks - variable assignments and command
-       test blocks.  Each may appear anywhere in the file and may appear
-       multiple times.  Lines beginning with the comment character (#) are
-       ignored.  Blank lines after a command test block signify the end of
-       that block, any other blank lines are ignored.  Unexpected lines are
-       considered an error and tteesstteerr will complain and exit on encountering
-       such.
+FILE FORMAT
+    The test file format is designed to be as simple as possible. It
+    consists of two functional blocks - variable assignments and command
+    test blocks. Each may appear anywhere in the file and may appear
+    multiple times. Lines beginning with the comment character (#) are
+    ignored. Blank lines after a command test block signify the end of that
+    block, any other blank lines are ignored. Unexpected lines are
+    considered an error and tester will complain and exit on encountering
+    such.
 
-   VVaarriiaabbllee AAssssiiggnnmmeenntt
-       In order to facilitate readability and reuse, variables may be declared
-       and then used in later commands or output matching expressions.  The
-       general form of an assignment is
+  Variable Assignment
+    In order to facilitate readability and reuse, variables may be declared
+    and then used in later commands or output matching expressions. The
+    general form of an assignment is
 
-           VARIABLE = VALUE
+        VARIABLE = VALUE
 
-       Whitespace around the equals sign is optional.  Everything beyond the
-       equals sign (excluding leading whitespace) is used as the variable's
-       value.  Multiple assignments to the same variable are allowed; the last
-       one is used the next time the variable is referenced in a command test
-       block.
+    Whitespace around the equals sign is optional. Everything beyond the
+    equals sign (excluding leading whitespace) is used as the variable's
+    value. Multiple assignments to the same variable are allowed; the last
+    one is used the next time the variable is referenced in a command test
+    block.
 
-       Variable assignment may also use one of two built in functions:
-       @@RRAANNDDIINNTT and @@RRAANNDDWWOORRDD.  Each may be called multiple times in a single
-       variable assignment.
+    Variable assignment may also use one of two built in functions: @RANDINT
+    and @RANDWORD. Each may be called multiple times in a single variable
+    assignment.
 
-       @RANDINT(N)
-               Generate a random integer between 0 and _N and substitute that
-               into the variable's value.
+    @RANDINT(N)
+            Generate a random integer between 0 and *N* and substitute that
+            into the variable's value.
 
-       @RANDWORD(N)
-               Generate a list of _N random words from _/_u_s_r_/_s_h_a_r_e_/_d_i_c_t_/_w_o_r_d_s
-               (or other word list given with --ww option).  Words are space
-               separated.
+    @RANDWORD(N)
+            Generate a list of *N* random words from /usr/share/dict/words
+            (or other word list given with -w option). Words are space
+            separated.
 
-   CCoommmmaanndd TTeesstt BBlloocckkss
-       The fundamental purpose of tteesstteerr is to run commands and verify output
-       and exit codes.  The command test blocks define these commands and
-       expected results.  The format of a command test block is:
+  Command Test Blocks
+    The fundamental purpose of tester is to run commands and verify output
+    and exit codes. The command test blocks define these commands and
+    expected results. The format of a command test block is:
 
-           COMMAND /usr/bin/some/command --arg1 --arg2 etc.
-           STDOUT a regular expression
-           STDERR another regular expression
-           EXIT N
+        COMMAND /usr/bin/some/command --arg1 --arg2 etc.
+        STDOUT a regular expression
+        STDERR another regular expression
+        EXIT N
 
-       Command test blocks begin with CCOOMMMMAANNDD and end with a blank line or
-       end-of-file.  The SSTTDDOOUUTT, SSTTDDEERRRR, and EEXXIITT lines are all optional.  If
-       none are present, it is not an error, however the command implicitly is
-       always a success (if you don't care about any output or exit code, why
-       include it?).
+    Command test blocks begin with COMMAND and end with a blank line or
+    end-of-file. The STDOUT, STDERR, and EXIT lines are all optional. If
+    none are present, it is not an error, however the command implicitly is
+    always a success (if you don't care about any output or exit code, why
+    include it?).
 
-       Both the SSTTDDOOUUTT and SSTTDDEERRRR lines are interpreted as regular expressions
-       with mm and ss modifiers - dot matches newlines and anchors match next to
-       embedded newlines.  E.g., the following SSTTDDOOUUTT matches are checked in
-       tteesstteerr as such:
+    Both the STDOUT and STDERR lines are interpreted as regular expressions
+    with m and s modifiers - dot matches newlines and anchors match next to
+    embedded newlines. E.g., the following STDOUT matches are checked in
+    tester as such:
 
-           STDOUT a string
-             $stdout =~ /a string/ms
+        STDOUT a string
+          $stdout =~ /a string/ms
 
-           STDOUT ^Version [2-4]\.\d+\.\d+(-\w+)$
-             $stdout =~ /^Version [2-4]\.\d+\.\d+(-\w+)$/ms
+        STDOUT ^Version [2-4]\.\d+\.\d+(-\w+)$
+          $stdout =~ /^Version [2-4]\.\d+\.\d+(-\w+)$/ms
 
-       The EEXXIITT line compares the command's exit code with that specified.
+    The EXIT line compares the command's exit code with that specified.
 
-       If multiple tests (SSTTDDOOUUTT, SSTTDDEERRRR, EEXXIITT) are included for a command,
-       all must pass for the command test block to pass.
+    If multiple tests (STDOUT, STDERR, EXIT) are included for a command, all
+    must pass for the command test block to pass.
 
-RREETTUURRNN VVAALLUUEESS
-       tteesstteerr exits with one of the following values:
+RETURN VALUES
+    tester exits with one of the following values:
 
-       0       All tests passed.
+    0       All tests passed.
 
-       1       One or more tests failed.
+    1       One or more tests failed.
 
-       >1      A processing error occurred.
+    >1      A processing error occurred.
 
-SSTTAANNDDAARRDDSS
-       tteesstteerr outputs standard TAP protocol tests results as described at
-       <http://http://testanything.org/>.  If --nn is specified, version 1.3 of
-       TAP is used.
-
+STANDARDS
+    tester outputs standard TAP protocol tests results as described at
+    <http://http://testanything.org/>. If -n is specified, version 1.3 of
+    TAP is used.
 
