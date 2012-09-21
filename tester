@@ -40,7 +40,9 @@ sub randword ($) {
 
   for (my $n = 0; $n < $nwords; $n++) {
     my $i = int (rand ($#WORDS + 1));
-    push @string, $WORDS[$i];
+    my $word = $WORDS[$i];
+    $word =~ s/\W//g;
+    push @string, $word;
   }
   return (join (' ', @string));
 }
